@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Calibration } from '../core/audio/types';
 import { FadingState, initialFading } from '../core/guidance/fading';
+import { computeReference, LatencyBaseline, LatencyRecord, ReferenceInfo } from '../core/latency';
 import { CheckIn, CustomWord, defaultProgress, defaultSettings, Progress, SessionRecord, Settings } from '../core/tracking/types';
 import { engine } from './audio/engine';
 import { ProgressDb } from './storage/db';
@@ -14,6 +15,8 @@ export interface AppState {
   sessions: SessionRecord[];
   customWords: CustomWord[];
   checkins: CheckIn[];
+  latency: LatencyRecord[];
+  latencyBaseline: LatencyBaseline | null;
   disclaimerAccepted: boolean;
 }
 
@@ -26,6 +29,8 @@ const initial: AppState = {
   sessions: [],
   customWords: [],
   checkins: [],
+  latency: [],
+  latencyBaseline: null,
   disclaimerAccepted: false,
 };
 
@@ -55,7 +60,7 @@ export const store = {
     if (state.loaded) return;
     try {
       const d = getDb();
-      const [settings, calibration, fading, progress, sessions, customWords, checkins, disclaimer] = await Promise.all([
+      const [settings, calibration, fading, progress, sessions, customWords, checkins, disclaimer, latency, latencyBaseline] = await Promise.all([
         d.getKv<Settings>('settings'),
         d.getKv<Calibration>('calibration'),
         d.getKv<FadingState>('fading'),
@@ -64,6 +69,8 @@ export const store = {
         d.listWords(),
         d.listCheckins(),
         d.getKv<boolean>('disclaimerAccepted'),
+        d.listLatency(),
+        d.getKv<LatencyBaseline>('latencyBaseline'),
       ]);
       const merged = { ...defaultSettings, ...settings };
       if (calibration) engine.setCalibration(calibration);
@@ -76,6 +83,8 @@ export const store = {
         sessions,
         customWords,
         checkins,
+        latency,
+        latencyBaseline: latencyBaseline ?? null,
         disclaimerAccepted: !!disclaimer,
       });
     } catch (e) {
@@ -121,6 +130,30 @@ export const store = {
     set({ checkins: [...state.checkins.filter((x) => x.date !== c.date), c] });
     persist(() => getDb().putCheckin(c));
   },
+  /** Store one attempt's latency numbers; the first one starts the 2-week baseline window. */
+  addLatency(r: LatencyRecord) {
+    const patch: Partial<AppState> = { latency: [...state.latency, r] };
+    if (!state.latencyBaseline) {
+      const b = { startedAt: r.timestamp };
+      patch.latencyBaseline = b;
+      persist(() => getDb().setKv('latencyBaseline', b));
+    }
+    set(patch);
+    persist(() => getDb().putLatency(r));
+  },
+  patchLatency(id: string, patch: Partial<LatencyRecord>) {
+    const cur = state.latency.find((x) => x.id === id);
+    if (!cur) return;
+    const next = { ...cur, ...patch };
+    set({ latency: state.latency.map((x) => (x.id === id ? next : x)) });
+    persist(() => getDb().putLatency(next));
+  },
+  /** Start a new baseline window now; the personal reference is rebuilt from the next easy items. */
+  recalibrateLatencyBaseline() {
+    const b = { startedAt: Date.now() };
+    set({ latencyBaseline: b });
+    persist(() => getDb().setKv('latencyBaseline', b));
+  },
   acceptDisclaimer() {
     set({ disclaimerAccepted: true });
     persist(() => getDb().setKv('disclaimerAccepted', true));
@@ -131,6 +164,11 @@ export const store = {
     set({ ...initial, loaded: true });
   },
 };
+
+/** Current personal reference start latency (see core/latency/reference). */
+export function currentReference(): ReferenceInfo {
+  return computeReference(state.latency, state.latencyBaseline, Date.now());
+}
 
 export function useStore<T>(selector: (s: AppState) => T): T {
   return useSyncExternalStore(store.subscribe, () => selector(store.get()));

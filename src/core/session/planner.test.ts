@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planSession } from './planner';
+import { mulberry32, pickWeighted, planSession } from './planner';
 
 describe('planSession', () => {
   const drills = (steps: ReturnType<typeof planSession>) => steps.flatMap((s) => (s.kind === 'drill' ? [s.item] : []));
@@ -34,5 +34,18 @@ describe('planSession', () => {
   it('has roughly ten minutes of material', () => {
     const steps = planSession({ stage: 'words', seed: 3 });
     expect(drills(steps).length).toBeGreaterThanOrEqual(14);
+  });
+
+  it('brings back words with long starts, favouring the worst', () => {
+    const revisit = [{ text: 'ticket', weight: 9 }, { text: 'coffee', weight: 1 }];
+    const steps = planSession({ stage: 'words', seed: 4, revisit });
+    const texts = drills(steps).filter((d) => d.category === 'revisit').map((d) => d.text);
+    expect(texts.sort()).toEqual(['coffee', 'ticket']);
+    for (const stage of ['sentences', 'passages', 'free'] as const) {
+      expect(drills(planSession({ stage, seed: 4, revisit })).some((d) => d.category === 'revisit')).toBe(true);
+    }
+    let ticketFirst = 0;
+    for (let i = 0; i < 200; i++) if (pickWeighted(revisit, 1, mulberry32(i))[0].text === 'ticket') ticketFirst++;
+    expect(ticketFirst).toBeGreaterThan(150);
   });
 });

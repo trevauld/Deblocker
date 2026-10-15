@@ -4,7 +4,7 @@ import type { GeneratedCurve } from '../../core/curve/types';
 import { scoreAttempt } from '../../core/scoring/score';
 import type { ScoreResult, Strictness } from '../../core/scoring/types';
 import type { Settings } from '../../core/tracking/types';
-import { makeAutoDriver } from '../audio/autoDriver';
+import { AutoFaults, makeAutoDriver } from '../audio/autoDriver';
 import { engine } from '../audio/engine';
 import { drawView, UserPoint } from '../draw';
 import { CurveCanvas } from './CurveCanvas';
@@ -15,6 +15,8 @@ export type MatchPhase = 'idle' | 'preview' | 'countdown' | 'speaking' | 'result
 export interface AttemptOutcome {
   result: ScoreResult;
   user: UserPoint[];
+  /** Observer-mode taps (ms after the start cue); undefined when observer mode is off. */
+  observerTaps?: number[];
 }
 
 const PAST_MS = 2500;
@@ -35,6 +37,10 @@ interface Props {
   /** Curve that the dev auto-voice follows when `curve` is null. */
   autoCurve?: GeneratedCurve | null;
   freeSpeech?: { msPerSyllable: number; onsetMs: number };
+  /** Dev mode: delay / mid-word silence injected into the auto-voice. */
+  simFaults?: AutoFaults;
+  /** A helper taps B (or the button) when they hear a block. Never shown to the speaker as feedback. */
+  observer?: boolean;
   heading?: ReactNode;
   /** Called after every scored attempt. attemptNo is 0 for the first try. */
   onFinished?: (o: AttemptOutcome, attemptNo: number) => void;
@@ -62,6 +68,7 @@ export function LiveMatch(props: Props) {
   const checker = useRef<number | null>(null);
   const activeRef = useRef(-1);
   const attemptRef = useRef(0);
+  const taps = useRef<number[]>([]);
   const propsRef = useRef(props);
   propsRef.current = props;
 
@@ -78,6 +85,19 @@ export function LiveMatch(props: Props) {
 
   useEffect(() => () => { clearTimers(); stopListening(); }, [stopListening]);
 
+  const tap = useCallback(() => {
+    if (phaseRef.current === 'speaking') taps.current.push(Math.round(performance.now() - t0.current));
+  }, []);
+  useEffect(() => {
+    if (!props.observer) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.code === 'KeyB' && !e.repeat && !(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'))) tap();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [props.observer, tap]);
+
   const finish = useCallback(() => {
     if (phaseRef.current !== 'speaking') return;
     stopListening();
@@ -90,7 +110,7 @@ export function LiveMatch(props: Props) {
       strictness: p.strictness,
       bandHalfWidth: p.guidance.bandHalfWidth,
     });
-    const o = { result, user: samples };
+    const o: AttemptOutcome = { result, user: samples, observerTaps: p.observer ? [...taps.current] : undefined };
     setOutcome(o);
     setActiveSyl(-1);
     activeRef.current = -1;
@@ -102,13 +122,14 @@ export function LiveMatch(props: Props) {
 
   function beginSpeaking() {
     user.current = [];
+    taps.current = [];
     activeRef.current = -1;
     engine.resetSmoothing();
     t0.current = performance.now();
     unsub.current = engine.onLevel((s) => { user.current.push({ t: s.t - t0.current, level: s.level }); });
     if (engine.mode === 'simulated' && autoplay !== 'off') {
       const c = curve ?? autoCurve;
-      if (c) engine.sim.setDriver(makeAutoDriver(c, autoplay, t0.current));
+      if (c) engine.sim.setDriver(makeAutoDriver(c, autoplay, t0.current, props.simFaults));
     }
     go('speaking');
     setCue('');
@@ -117,8 +138,11 @@ export function LiveMatch(props: Props) {
       let lastVoiced = -1;
       for (let i = user.current.length - 1; i >= 0; i--) if (user.current[i].level >= SPEAKING_THRESHOLD) { lastVoiced = user.current[i].t; break; }
       if (curve) {
+        // Be patient: a block can hold up the start or interrupt the word, and the attempt must not end in the middle of one.
         const dur = curve.durationMs;
-        if (now > dur + 1200 && (now - lastVoiced > 1000 || now > dur * 2 + 3000)) finish();
+        if (lastVoiced < 0) {
+          if (now > dur * 2 + 6000) finish(); // never started
+        } else if ((now > dur + 1200 && now - lastVoiced > 2500) || now > dur * 2 + 8000) finish();
       } else {
         if ((lastVoiced > 0 && now > 3000 && now - lastVoiced > 2500) || now > FREE_MAX_MS) finish();
       }
@@ -216,6 +240,7 @@ export function LiveMatch(props: Props) {
         {phase === 'preview' && <button className="btn" onClick={() => { clearTimers(); countdown(); }}>Skip preview</button>}
         {(phase === 'countdown' || phase === 'preview') && <button className="btn" onClick={cancel}>Cancel</button>}
         {phase === 'speaking' && <button className="btn primary" onClick={finish}>Done</button>}
+        {phase === 'speaking' && props.observer && <button className="btn" onClick={tap} aria-label="Observer: block heard">Block heard (B)</button>}
         {phase === 'idle' && props.onSkip && <button className="btn" onClick={props.onSkip}>Skip</button>}
       </div>
       {phase === 'result' && outcome && (

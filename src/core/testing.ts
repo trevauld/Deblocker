@@ -77,3 +77,19 @@ export function synthVoice(opts: {
   }
   return out;
 }
+
+/** Level series from [startMs, endMs, level] blocks on a 16 ms grid (hard edges: use for gaps and plateaus). */
+export function blocks(parts: [number, number, number][], totalMs: number, stepMs = 16): Sample[] {
+  const out: Sample[] = [];
+  for (let t = 0; t <= totalMs; t += stepMs) {
+    let level = 0;
+    for (const [a, b, l] of parts) if (t >= a && t < b) level = Math.max(level, l);
+    out.push({ t, level });
+  }
+  return out;
+}
+
+/** Pointwise max of series sampled on the same grid. */
+export function maxOf(...series: Sample[][]): Sample[] {
+  return series[0].map((s, i) => ({ t: s.t, level: Math.max(...series.map((x) => x[i]?.level ?? 0)) }));
+}

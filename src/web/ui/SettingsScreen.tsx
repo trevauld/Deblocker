@@ -24,6 +24,28 @@ export function SettingsScreen({ onCalibrate }: { onCalibrate: () => void }) {
       </section>
 
       <section className="card">
+        <h2>Start-time tracking</h2>
+        <label className="row" style={{ gap: 8 }}>
+          <input type="checkbox" checked={settings.trackLatency} onChange={(e) => store.updateSettings({ trackLatency: e.target.checked })} />
+          <span>Record how long each word takes to start (numbers only; results show up in the session summary and Progress)</span>
+        </label>
+        <div className="grid">
+          <label>
+            <span className="muted small">Gap = silence longer than {settings.latencyGapMs} ms inside speech</span>
+            <input type="range" min={150} max={800} step={50} value={settings.latencyGapMs} onChange={(e) => store.updateSettings({ latencyGapMs: Number(e.target.value) })} />
+          </label>
+          <label>
+            <span className="muted small">Long start = {settings.latencyMarginMs} ms or more above your reference</span>
+            <input type="range" min={300} max={1500} step={100} value={settings.latencyMarginMs} onChange={(e) => store.updateSettings({ latencyMarginMs: Number(e.target.value) })} />
+          </label>
+        </div>
+        <label className="row" style={{ gap: 8 }}>
+          <input type="checkbox" checked={settings.observerMode} onChange={(e) => store.updateSettings({ observerMode: e.target.checked })} />
+          <span>Observer mode: a helper presses <kbd>B</kbd> (or the button) when they hear a block, to check the app's flags</span>
+        </label>
+      </section>
+
+      <section className="card">
         <h2>Where you are</h2>
         <div className="grid">
           <label>
@@ -65,6 +87,22 @@ export function SettingsScreen({ onCalibrate }: { onCalibrate: () => void }) {
               <option value="fast">Gentle onset but rushed (1.7× speed)</option>
             </select>
           </label>
+        )}
+        {settings.inputMode === 'simulated' && (
+          <div className="grid">
+            <label>
+              <span className="muted small">Auto-voice: wait before starting</span>
+              <select value={settings.simStartDelayMs} onChange={(e) => store.updateSettings({ simStartDelayMs: Number(e.target.value) })}>
+                <option value={0}>No delay</option><option value={1000}>1 s</option><option value={2000}>2 s</option><option value={3000}>3 s</option>
+              </select>
+            </label>
+            <label>
+              <span className="muted small">Auto-voice: silence in the middle of the first phrase</span>
+              <select value={settings.simMidSilenceMs} onChange={(e) => store.updateSettings({ simMidSilenceMs: Number(e.target.value) })}>
+                <option value={0}>None</option><option value={600}>0.6 s</option><option value={1500}>1.5 s</option>
+              </select>
+            </label>
+          </div>
         )}
       </section>
 

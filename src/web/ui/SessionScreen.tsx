@@ -2,12 +2,13 @@ import { useMemo, useRef, useState } from 'react';
 import { generateCurve, generateSustained } from '../../core/curve/generate';
 import { settingsForPace } from '../../core/curve/levelSettings';
 import { GUIDANCE, recordAttempt } from '../../core/guidance/fading';
+import { analyzeLatency, LatencyRecord, revisitCandidates } from '../../core/latency';
 import type { FadingChange } from '../../core/guidance/fading';
 import { CATEGORY_LABEL, DrillItem, planSession } from '../../core/session/planner';
-import { advanceProgress, summarizeSession } from '../../core/tracking/stats';
+import { advanceProgress, localDate, summarizeSession } from '../../core/tracking/stats';
 import type { AttemptRecord, SessionRecord, Stage } from '../../core/tracking/types';
 import { useLexicon } from '../lexicon';
-import { store, useStore } from '../store';
+import { currentReference, store, useStore } from '../store';
 import { BreathPacer } from './BreathPacer';
 import { AttemptOutcome, LiveMatch } from './LiveMatch';
 
@@ -21,7 +22,12 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
   const start = useRef(store.get());
   const startedAt = useRef(Date.now());
   const steps = useMemo(
-    () => planSession({ stage: start.current.progress.stage, customWords: start.current.customWords, seed: startedAt.current }),
+    () => planSession({
+      stage: start.current.progress.stage,
+      customWords: start.current.customWords,
+      revisit: start.current.settings.trackLatency ? revisitCandidates(start.current.latency) : [],
+      seed: startedAt.current,
+    }),
     [],
   );
   const pace = start.current.progress.pace;
@@ -29,6 +35,9 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
   const [idx, setIdx] = useState(0);
   const attempts = useRef<AttemptRecord[]>([]);
   const [banner, setBanner] = useState<{ change: FadingChange; text: string } | null>(null);
+  const sessionId = useRef(crypto.randomUUID?.() ?? String(startedAt.current));
+  const latencyRecs = useRef<LatencyRecord[]>([]);
+  const [lastRec, setLastRec] = useState<LatencyRecord | null>(null);
   const [summary, setSummary] = useState<{ record: SessionRecord; stageChange: string | null } | null>(null);
   const finalized = useRef(false);
   const startLevel = useRef(start.current.fading.level);
@@ -38,7 +47,7 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
     finalized.current = true;
     if (attempts.current.length === 0) { setSummary(null); return; }
     const record = summarizeSession({
-      id: crypto.randomUUID?.() ?? String(startedAt.current),
+      id: sessionId.current,
       startedAt: startedAt.current,
       stage: start.current.progress.stage,
       guidanceLevel: store.get().fading.level,
@@ -52,12 +61,13 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
     setSummary({ record, stageChange: next.stage !== before.stage ? `You've moved on to: ${STAGE_LABEL[next.stage]}!` : null });
   };
 
-  if (idx >= steps.length) return <Summary summary={summary} startLevel={startLevel.current} onExit={onExit} onCheckIn={onCheckIn} />;
+  if (idx >= steps.length) return <Summary summary={summary} startLevel={startLevel.current} latencyRecs={latencyRecs.current} onExit={onExit} onCheckIn={onCheckIn} />;
 
   const step = steps[idx];
   const endSession = () => { finalize(); setIdx(steps.length); };
   const next = () => {
     setBanner(null);
+    setLastRec(null);
     if (idx + 1 >= steps.length) endSession();
     else setIdx(idx + 1);
   };
@@ -96,7 +106,7 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
 
   const item = step.item;
   const guidance = item.free ? GUIDANCE[4] : GUIDANCE[fading.level];
-  const onFinished = (o: AttemptOutcome, n: number) => {
+  const onFinished = (o: AttemptOutcome, n: number, curve: ReturnType<typeof generateCurve> | null) => {
     if (n !== 0) return;
     const r = o.result;
     attempts.current.push({ text: item.text, total: r.total, easyOnset: r.easyOnset, tempoRatio: r.tempo.ratio, spansMs: r.userSpansMs, heard: r.onset.detected });
@@ -104,6 +114,31 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
     store.setFading(state);
     if (change === 'advance') setBanner({ change, text: `Your easy starts are steady. Moving to guidance level ${state.level} (${GUIDANCE[state.level].name}): ${GUIDANCE[state.level].description}` });
     else if (change === 'back') setBanner({ change, text: `Let's go back to level ${state.level} (${GUIDANCE[state.level].name}) for a while. That's a normal part of learning.` });
+
+    // Block-latency numbers (known text only). Nothing from this is shown until the session summary.
+    const cfg = store.get().settings;
+    if (cfg.trackLatency && curve && !item.free) {
+      const ref = currentReference().referenceMs;
+      const lat = analyzeLatency({ user: o.user, target: curve, onset: r.onset, referenceMs: ref, options: { gapMs: cfg.latencyGapMs, longStartMarginMs: cfg.latencyMarginMs } });
+      const now = Date.now();
+      const rec: LatencyRecord = {
+        id: crypto.randomUUID?.() ?? `${now}-${Math.random()}`,
+        sessionId: sessionId.current,
+        timestamp: now,
+        date: localDate(now),
+        item: item.text,
+        category: item.category,
+        stage: start.current.progress.stage,
+        pace,
+        guidanceLevel: guidance.level,
+        ...lat,
+        referenceMs: ref,
+        observerTaps: o.observerTaps,
+      };
+      store.addLatency(rec);
+      latencyRecs.current.push(rec);
+      setLastRec(rec);
+    }
   };
 
   return (
@@ -131,8 +166,15 @@ export function SessionScreen({ onExit, onCheckIn }: { onExit: () => void; onChe
                 {item.free && <p className="muted">No curve this time. Start softly, speak slowly, and breathe between thoughts. Press Done when you finish.</p>}
               </>
             }
-            onFinished={onFinished}
-            resultExtra={banner ? <p className="notice" role="status">{banner.text}</p> : null}
+            onFinished={(o, n) => onFinished(o, n, curve)}
+            observer={settings.observerMode}
+            simFaults={{ startDelayMs: settings.simStartDelayMs, midSilenceMs: settings.simMidSilenceMs }}
+            resultExtra={
+              <>
+                {banner && <p className="notice" role="status">{banner.text}</p>}
+                {lastRec && <SelfReport key={lastRec.id} id={lastRec.id} />}
+              </>
+            }
             nextLabel={idx + 1 >= steps.length ? 'Finish' : 'Next'}
             onNext={next}
             onSkip={next}
@@ -159,9 +201,10 @@ function DrillView({ item, lookupReady, render, makeCurve }: {
   return <>{render(item.free ? null : curve)}</>;
 }
 
-function Summary({ summary, startLevel, onExit, onCheckIn }: {
+function Summary({ summary, startLevel, latencyRecs, onExit, onCheckIn }: {
   summary: { record: SessionRecord; stageChange: string | null } | null;
   startLevel: number;
+  latencyRecs: LatencyRecord[];
   onExit: () => void;
   onCheckIn: () => void;
 }) {
@@ -189,6 +232,7 @@ function Summary({ summary, startLevel, onExit, onCheckIn }: {
         <Stat label="Guidance level" value={`${fading.level}`} note={fading.level === startLevel ? GUIDANCE[fading.level].name : `${GUIDANCE[fading.level].name} (was ${startLevel})`} />
       </div>
       {summary.stageChange && <p className="notice" role="status">{summary.stageChange}</p>}
+      <StartTimes recs={latencyRecs} />
       <p>
         {r.easyOnsetPct >= 80 ? 'Lots of gentle starts today. Nice work.' : r.easyOnsetPct >= 50 ? 'A good session. Keep letting the air flow before the voice.' : 'Tough day? That happens, and it is useful information. Short, slow practice still counts.'}
       </p>
@@ -206,6 +250,61 @@ function Stat({ label, value, note }: { label: string; value: string; note: stri
       <span className="muted small">{label}</span>
       <strong style={{ fontSize: '1.8rem' }}>{value}</strong>
       <span className="muted small">{note}</span>
+    </div>
+  );
+}
+
+/** One-tap "I blocked" self-report, offered after the result (never during an attempt). */
+function SelfReport({ id }: { id: string }) {
+  const [blocked, setBlocked] = useState(false);
+  return (
+    <div className="row">
+      <button
+        className="btn"
+        aria-pressed={blocked}
+        onClick={() => { const v = !blocked; setBlocked(v); store.patchLatency(id, { selfReportBlocked: v }); }}
+      >
+        {blocked ? '✓ Marked: I blocked on this one' : 'I blocked on this one'}
+      </button>
+      <span className="muted small">Optional. Helps your start-time trends.</span>
+    </div>
+  );
+}
+
+const sec = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/** Start-time findings in neutral wording, shown only here in the summary. */
+function StartTimes({ recs }: { recs: LatencyRecord[] }) {
+  const baseline = useStore((s) => s.latencyBaseline);
+  const info = currentReference();
+  if (!recs.length) return null;
+  const lats = recs.filter((r) => r.startLatencyMs !== null).map((r) => r.startLatencyMs as number).sort((a, b) => a - b);
+  const med = lats.length ? lats[lats.length >> 1] : null;
+  const longs = recs.filter((r) => r.longStart);
+  const gaps = recs.filter((r) => r.gaps.length > 0);
+  const blocked = recs.filter((r) => r.selfReportBlocked);
+  return (
+    <div>
+      <h3>Start times</h3>
+      {med !== null && (
+        <p>
+          Median start today: {sec(med)}
+          {info.referenceMs !== null && <> (your usual on easy words: {sec(info.referenceMs)})</>}.
+        </p>
+      )}
+      {info.referenceMs === null && baseline && (
+        <p className="muted small">Still building your personal baseline: {Math.max(0, 8 - info.easyCount)} more easy-word attempts needed before long starts can be marked.</p>
+      )}
+      {longs.length + gaps.length + blocked.length === 0 ? (
+        <p className="muted">Nothing stood out today.</p>
+      ) : (
+        <ul>
+          {longs.map((r) => <li key={r.id + 'l'}>Long start on "{r.item}": {sec(r.startLatencyMs as number)}{r.hardOnsetAfterWait ? ', then a sudden start' : ''}</li>)}
+          {gaps.flatMap((r) => r.gaps.map((g, i) => <li key={r.id + 'g' + i}>Pause of {sec(g.durationMs)} inside "{g.word ?? r.item}" (in "{r.item}")</li>))}
+          {blocked.map((r) => <li key={r.id + 'b'}>You marked "{r.item}" as a block</li>)}
+        </ul>
+      )}
+      <p className="muted small">These are practice markers, not a clinical measure. Look at the weekly trend in Progress, not a single day.</p>
     </div>
   );
 }

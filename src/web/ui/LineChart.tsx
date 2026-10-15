@@ -1,11 +1,14 @@
 export interface Series { name: string; values: (number | null)[]; cls: 'a' | 'b' }
 
 /** Minimal SVG line chart: x = session number, y = value. */
-export function LineChart({ series, labels, yMax, yLabel, height = 180, format = (v: number) => String(Math.round(v)) }: {
+export function LineChart({ series, labels, yMax, yLabel, band, bandLabel, height = 180, format = (v: number) => String(Math.round(v)) }: {
   series: Series[];
   labels: string[];
   yMax: number;
   yLabel: string;
+  /** Optional shaded band (e.g. the baseline range), in the same units as the series. */
+  band?: [number, number] | null;
+  bandLabel?: string;
   height?: number;
   format?: (v: number) => string;
 }) {
@@ -27,6 +30,7 @@ export function LineChart({ series, labels, yMax, yLabel, height = 180, format =
             <text x={padL - 6} y={y(f * yMax) + 4} textAnchor="end">{format(f * yMax)}</text>
           </g>
         ))}
+        {band && <rect x={padL} width={W - padL - padR} y={y(band[1])} height={Math.max(2, y(band[0]) - y(band[1]))} fill="var(--accent)" opacity={0.15}><title>{bandLabel ?? 'Band'}</title></rect>}
         {labels.map((l, i) => (n <= 8 || i % Math.ceil(n / 8) === 0) && <text key={i} x={x(i)} y={H - 6} textAnchor="middle">{l}</text>)}
         {series.map((s) => {
           const pts = s.values.map((v, i) => (v === null ? null : [x(i), y(v)] as const));
@@ -41,6 +45,7 @@ export function LineChart({ series, labels, yMax, yLabel, height = 180, format =
       </svg>
       <figcaption className="legend">
         <span>{yLabel}</span>
+        {band && <span><i style={{ background: 'var(--accent)', opacity: 0.4, height: 10 }} />{bandLabel ?? 'Band'}</span>}
         {series.map((s) => <span key={s.name}><i style={{ background: s.cls === 'a' ? 'var(--accent)' : 'var(--user)' }} />{s.name}</span>)}
       </figcaption>
     </figure>

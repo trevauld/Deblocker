@@ -18,7 +18,14 @@ describe('ProgressDb', () => {
     await db.addSession({ id: 'b', startedAt: 20, date: '2026-01-02', stage: 'words', guidanceLevel: 1, pace: 0, attempts: 1, easyOnsetPct: 100, avgTempoRatio: 1, avgPhraseMs: 1000, avgScore: 90 });
     await db.addSession({ id: 'a', startedAt: 10, date: '2026-01-01', stage: 'words', guidanceLevel: 1, pace: 0, attempts: 1, easyOnsetPct: 0, avgTempoRatio: 1, avgPhraseMs: 1000, avgScore: 10 });
     expect((await db.listSessions()).map((s) => s.id)).toEqual(['a', 'b']);
+    await db.putLatency({ id: 'l2', sessionId: 's', timestamp: 20, date: '2026-01-02', item: 'ago', category: 'vowels', stage: 'words', pace: 0, guidanceLevel: 1, startLatencyMs: 400, gaps: [], hardOnset: false, hardOnsetAfterWait: false, longStart: false, flagged: false, referenceMs: null });
+    await db.putLatency({ id: 'l1', sessionId: 's', timestamp: 10, date: '2026-01-01', item: 'ago', category: 'vowels', stage: 'words', pace: 0, guidanceLevel: 1, startLatencyMs: 900, gaps: [{ startMs: 1, durationMs: 700 }], hardOnset: true, hardOnsetAfterWait: false, longStart: false, flagged: true, referenceMs: null, selfReportBlocked: true });
+    await db.putLatency({ id: 'l1', sessionId: 's', timestamp: 10, date: '2026-01-01', item: 'ago', category: 'vowels', stage: 'words', pace: 0, guidanceLevel: 1, startLatencyMs: 900, gaps: [], hardOnset: true, hardOnsetAfterWait: false, longStart: false, flagged: true, referenceMs: null, selfReportBlocked: false });
+    const lat = await db.listLatency();
+    expect(lat.map((l) => l.id)).toEqual(['l1', 'l2']);
+    expect(lat[0].selfReportBlocked).toBe(false);
     await db.clearAll();
     expect(await db.listSessions()).toHaveLength(0);
+    expect(await db.listLatency()).toHaveLength(0);
   });
 });

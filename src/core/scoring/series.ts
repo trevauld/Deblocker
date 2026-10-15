@@ -52,3 +52,25 @@ export function speechSpans(samples: UserSample[], threshold = VOICE_ON, mergeGa
 }
 
 export const spanTotal = (spans: [number, number][]) => spans.reduce((n, [a, b]) => n + (b - a), 0);
+
+/**
+ * Voiced runs as [firstT, lastT] pairs. A run needs at least `minMs` of voiced frames, so single-frame
+ * flicker above the threshold is ignored.
+ */
+export function voicedRuns(samples: UserSample[], threshold = VOICE_ON, minMs = 80): [number, number][] {
+  const runs: [number, number][] = [];
+  let start: number | null = null;
+  let last = 0;
+  const close = () => {
+    if (start !== null && last - start >= minMs) runs.push([start, last]);
+    start = null;
+  };
+  for (const s of samples) {
+    if (s.level >= threshold) {
+      if (start === null) start = s.t;
+      last = s.t;
+    } else close();
+  }
+  close();
+  return runs;
+}

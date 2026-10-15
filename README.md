@@ -31,6 +31,17 @@ loudness. "Auto-play" makes the simulated voice follow the target gentle / sudde
 - `src/web/` – browser adapters and React UI (Web Audio mic, simulated voice, IndexedDB, canvas views)
 - `scripts/build-lexicon.ts` – trims the CMU dictionary into a lazy-loaded JSON file
 
+## Block-latency tracking (optional)
+
+Per drill item with known text (not free speech) the app records, as numbers only: start latency (cue → first sustained voicing),
+gaps (silences ≥ 250 ms where the target expects voicing; planned breath pauses and 80–120 ms stop gaps are never flagged),
+whether the onset was hard, and an optional "I blocked" tap. A **long start** is ≥ 600 ms above your personal reference, the median
+start on easy words (vowels, h-words) during a 2-week baseline that is then held fixed (Progress → Recalibrate baseline to restart it).
+Flags never appear during an attempt, only in the session summary; Progress shows weekly medians against the baseline band and the
+hardest words, and words with long starts return as "Words to revisit". Settings has the thresholds, an observer mode (press **B** when
+you hear a block; agreement % and Cohen's κ are reported at the attempt level) and, in simulated-voice mode, an injected start delay and
+mid-phrase silence. Progress → Export attempts (CSV) downloads the numbers. These are practice markers, not a clinical measure.
+
 ## Notes and limits
 
 - Pronunciations come from CMU; unknown words use a rough spelling-based guess (flagged "guessed").
